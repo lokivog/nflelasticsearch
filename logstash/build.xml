@@ -1,0 +1,165 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- @author Michael Vogel -->
+<project name="logstash" default="build" basedir=".">
+
+	<taskdef resource="net/sf/antcontrib/antcontrib.properties" classpath="lib/ant/ant-contrib-1.0b3.jar" />
+
+	<!-- ======================================================================= -->
+	<!-- SET PROPERTIES -->
+	<!-- ======================================================================= -->
+
+	<!-- Load environment vars first -->
+	<property environment="env" />
+	<exec executable="hostname" outputproperty="hostname" />
+	<filter token="localhost.hostname" value="${hostname}" />
+
+	<!-- Load hostname-specific overrides -->
+	<property file="${basedir}/builder-overrides/host-${hostname}.properties" />
+
+	<!-- Load user-specific overrides -->
+	<property file="${basedir}/builder-overrides/user-${user.name}.properties" />
+
+	<!-- Load defaults -->
+	<property file="build.properties" />
+
+	<!-- =================================================================== -->
+	<!-- MACROS -->
+	<!-- =================================================================== -->
+
+	<macrodef name="start-logstash">
+		<attribute name="args" description="Arguments to pass to logstash" />
+		<sequential>
+			<echo message="Starting logstash with args: @{args}" />
+			<java jar="${build.dir}/${logstash.jar}" fork="true">
+				<arg line="@{args}" />
+				<jvmarg value="${java.arg.PerSize}" />
+				<jvmarg value="${java.arg.MaxPermSize}" />
+				<jvmarg value="${java.arg.Xms}" />
+				<jvmarg value="${java.arg.Xmx}" />
+			</java>
+		</sequential>
+
+	</macrodef>
+
+	<macrodef name="copy-configs" description="Copies the config file to the config build dir">
+		<attribute name="mode" default="${mode}" description="Logstash mode, possible values are shipper, indexer" />
+		<sequential>
+			<echo message="Copy from ${@{mode}.inputs}" />
+			<delete dir="${build.dir}/@{mode}" />
+			<mkdir dir="${build.dir}/@{mode}" />
+			<for param="var" list="${@{mode}.inputs}">
+				<sequential>
+					<local name="config.file" />
+					<condition property="config.file" value="overrides/input.@{var}.${hostname}.conf" else="input.@{var}.conf">
+						<available file="${config.dir}/inputs/overrides/input.@{var}.${hostname}.conf" />
+					</condition>
+					<copy todir="${build.dir}/@{mode}" flatten="true">
+						<fileset dir="${config.dir}/inputs">
+							<include name="${config.file}" />
+						</fileset>
+					</copy>
+				</sequential>
+			</for>
+			<for param="var" list="${@{mode}.filters}">
+				<sequential>
+					<local name="config.file" />
+					<condition property="config.file" value="overrides/filter.@{var}.${hostname}.conf" else="filter.@{var}.conf">
+						<available file="${config.dir}/filters/overrides/filter.@{var}.${hostname}.conf" />
+					</condition>
+					<copy todir="${build.dir}/@{mode}" flatten="true">
+						<fileset dir="${config.dir}/filters">
+							<include name="${config.file}" />
+						</fileset>
+					</copy>
+				</sequential>
+			</for>
+			<for param="var" list="${@{mode}.outputs}">
+				<sequential>
+					<local name="config.file" />
+					<condition property="config.file" value="overrides/output.@{var}.${hostname}.conf" else="output.@{var}.conf">
+						<available file="${config.dir}/outputs/overrides/output.@{var}.${hostname}.conf" />
+					</condition>
+					<copy todir="${build.dir}/@{mode}" flatten="true">
+						<fileset dir="${config.dir}/outputs">
+							<include name="${config.file}" />
+						</fileset>
+					</copy>
+				</sequential>
+			</for>
+			<replaceregexp match="ELASTIC_SEARCH_HOST" replace="${elasticsearch.host}" flags="g" byline="true">
+				<fileset dir="${build.dir}/@{mode}" includes="*" />
+			</replaceregexp>
+			<replaceregexp match="REDIS_HOST" replace="${redis.host}" flags="g" byline="true">
+				<fileset dir="${build.dir}/@{mode}" includes="*" />
+			</replaceregexp>
+		</sequential>
+	</macrodef>
+
+	<!-- =================================================================== -->
+	<!-- TARGETS -->
+	<!-- =================================================================== -->
+
+	<target name="-init">
+		<tstamp>
+			<format property="TIME" pattern="yyyy-MM-dd-HH-mm" locale="en" timezone="${default.timezone}" />
+		</tstamp>
+	</target>
+
+	<target name="build" depends="-init">
+		<mkdir dir="${build.dir}" />
+		<copy file="${lib.dir}/${logstash.jar}" todir="${build.dir}">
+		</copy>
+	</target>
+
+	<target name="clean">
+		<delete dir="${build.dir}" />
+	</target>
+
+	<target name="start" depends="build" description="Starts logstash in standalone mode with an embedded elasticsearch. Should be used for local development.">
+		<property name="mode.type" value="${mode}" />
+		<copy-configs mode="${mode.type}" />
+		<property name="logstash.args" value="agent -f ${build.dir}/${mode.type}" />
+		<start-logstash args="${logstash.args}" />
+	</target>
+
+	<target name="start-standalone" depends="build" description="Starts logstash in standalone mode with an embedded elasticsearch. Should be used for local development.">
+		<property name="mode.type" value="standalone" />
+		<copy-configs mode="${mode.type}" />
+		<property name="logstash.args" value="agent -f ${build.dir}/${mode.type}" />
+		<start-logstash args="${logstash.args}" />
+	</target>
+
+	<target name="start-standalone-embedded" depends="build" description="Starts logstash in standalone mode with an embedded elasticsearch. Should be used for local development.">
+		<property name="mode.type" value="embedded" />
+		<copy-configs mode="${mode.type}" />
+		<echo message="Server starting at http://localhost:9292" />
+		<property name="logstash.args" value="agent -f ${build.dir}/${mode.type} -- web" />
+		<start-logstash args="${logstash.args}" />
+	</target>
+
+	<target name="start-centralized" depends="build" description="Starts logstash in centralized mode.">
+		<property name="mode.type" value="centralized" />
+		<copy-configs mode="${mode.type}" />
+		<property name="logstash.args" value="agent -f ${build.dir}/${mode.type}" />
+		<start-logstash args="${logstash.args}" />
+	</target>
+
+	<target name="start-indexer" depends="build" description="Starts logstash in centralized mode.">
+		<property name="mode.type" value="indexer" />
+		<copy-configs mode="${mode.type}" />
+		<property name="logstash.args" value="agent -f ${build.dir}/${mode.type}" />
+		<start-logstash args="${logstash.args}" />
+	</target>
+
+	<target name="start-collectd" depends="build" description="Starts logstash in in collectd mode">
+		<property name="mode.type" value="collectd" />
+		<copy-configs mode="${mode.type}" />
+		<property name="logstash.args" value="agent -f ${build.dir}/${mode.type}" />
+		<start-logstash args="${logstash.args}" />
+	</target>
+
+	<target name="test" depends="build">
+		<copy-configs mode="centralized" />
+	</target>
+
+</project>
